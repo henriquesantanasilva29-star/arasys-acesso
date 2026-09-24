@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autorizar acesso · Arasys</title>
+<meta name="robots" content="noindex">
+<style>
+  :root { --bg:#0f1115; --card:#171a21; --line:#262a33; --txt:#e8eaef; --mut:#9aa1ad; --acc:#b6f24a; --err:#ff7a7a; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f5f6f8; --card:#fff; --line:#e3e6ea; --txt:#14161a; --mut:#5d6470; --acc:#3b7d00; --err:#b42318; } }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--txt);
+         font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding:16px; }
+  .card { width:100%; max-width:420px; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:28px; }
+  h1 { font-size:20px; margin:0 0 6px; }
+  p { margin:0 0 14px; color:var(--mut); }
+  label { display:block; font-size:13px; color:var(--mut); margin:12px 0 6px; }
+  input { width:100%; padding:11px 12px; border-radius:9px; border:1px solid var(--line); background:transparent; color:var(--txt); font-size:15px; }
+  button { width:100%; margin-top:14px; padding:12px; border-radius:9px; border:0; font-size:15px; font-weight:600; cursor:pointer; }
+  .pri { background:var(--acc); color:#0b0d10; }
+  .sec { background:transparent; color:var(--txt); border:1px solid var(--line); }
+  .link { background:none; color:var(--mut); font-weight:400; text-decoration:underline; padding:6px; margin-top:6px; }
+  ul { margin:6px 0 16px; padding-left:18px; color:var(--txt); }
+  li { margin:4px 0; }
+  .who { font-size:13px; color:var(--mut); border-top:1px solid var(--line); margin-top:18px; padding-top:12px; }
+  .err { color:var(--err); font-size:14px; margin-top:12px; min-height:1em; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main class="card">
+  <section id="carregando"><p>Carregando…</p></section>
+
+  <section id="login" hidden>
+    <h1>Entrar</h1>
+    <p>Use o login que a Arasys criou para você.</p>
+    <form id="form-login">
+      <label for="email">E-mail</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="senha">Senha</label>
+      <input id="senha" type="password" autocomplete="current-password" required>
+      <button class="pri" type="submit">Entrar</button>
+    </form>
+    <button class="link" id="btn-link" type="button">Prefiro receber um link por e-mail</button>
+    <div class="err" id="err-login"></div>
+  </section>
+
+  <section id="consentimento" hidden>
+    <h1 id="titulo">Autorizar acesso</h1>
+    <p><strong id="cliente">O Claude</strong> quer ler o arquivo do seu WhatsApp.</p>
+    <ul>
+      <li>Somente leitura. Nada é enviado, apagado ou marcado como lido.</li>
+      <li>Só os números ligados à sua conta. Os de outras pessoas não aparecem.</li>
+      <li>Você pode revogar quando quiser, desconectando o conector no Claude.</li>
+    </ul>
+    <button class="pri" id="btn-sim" type="button">Autorizar</button>
+    <button class="sec" id="btn-nao" type="button">Não autorizar</button>
+    <div class="who">Conectado como <span id="quem"></span> · <button class="link" id="btn-sair" type="button" style="width:auto;margin:0;padding:0">trocar de conta</button></div>
+    <div class="err" id="err-consent"></div>
+  </section>
+
+  <section id="erro" hidden>
+    <h1>Não deu certo</h1>
+    <p id="erro-msg"></p>
+  </section>
+</main>
+
+<script type="module">
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+  const SUPABASE_URL = "https://budncycvtyhlxzpggwkw.supabase.co";
+  const PUBLISHABLE_KEY = "sb_publishable_mvdK51btxcjFNfCGo3V2Eg_OkHuFb5l";
+  const sb = createClient(SUPABASE_URL, PUBLISHABLE_KEY);
+
+  const $ = (id) => document.getElementById(id);
+  const mostra = (id) => { for (const s of ["carregando","login","consentimento","erro"]) $(s).hidden = s !== id; };
+  const falha = (msg) => { $("erro-msg").textContent = msg; mostra("erro"); };
+
+  const authorizationId = new URLSearchParams(location.search).get("authorization_id");
+
+  async function fluxo() {
+    if (!authorizationId) return falha("Este endereço precisa ser aberto pelo Claude ao conectar o conector do WhatsApp.");
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) return mostra("login");
+
+    $("quem").textContent = session.user.email;
+    const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authorizationId);
+    if (error || !data) return falha(error?.message ?? "Pedido de autorização inválido ou expirado. Tente conectar de novo pelo Claude.");
+    if (!("authorization_id" in data) && data.redirect_url) { location.replace(data.redirect_url); return; }
+
+    const nome = data.client?.name || data.client?.client_name || "O Claude";
+    $("cliente").textContent = nome;
+    $("titulo").textContent = `Autorizar ${nome}`;
+    mostra("consentimento");
+  }
+
+  $("form-login").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    $("err-login").textContent = "";
+    const { error } = await sb.auth.signInWithPassword({ email: $("email").value.trim(), password: $("senha").value });
+    if (error) { $("err-login").textContent = "E-mail ou senha incorretos."; return; }
+    fluxo();
+  });
+
+  $("btn-link").addEventListener("click", async () => {
+    const email = $("email").value.trim();
+    if (!email) { $("err-login").textContent = "Digite o e-mail primeiro."; return; }
+    const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: location.href } });
+    $("err-login").textContent = error ? "Não foi possível enviar o link." : "Link enviado. Abra o e-mail neste mesmo aparelho.";
+  });
+
+  async function decide(aprovar) {
+    $("err-consent").textContent = "";
+    const fn = aprovar ? sb.auth.oauth.approveAuthorization : sb.auth.oauth.denyAuthorization;
+    const { data, error } = await fn.call(sb.auth.oauth, authorizationId);
+    if (error || !data?.redirect_url) { $("err-consent").textContent = error?.message ?? "Falhou. Tente de novo."; return; }
+    location.replace(data.redirect_url);
+  }
+  $("btn-sim").addEventListener("click", () => decide(true));
+  $("btn-nao").addEventListener("click", () => decide(false));
+  $("btn-sair").addEventListener("click", async () => { await sb.auth.signOut(); mostra("login"); });
+
+  sb.auth.onAuthStateChange((ev) => { if (ev === "SIGNED_IN" && $("login").hidden === false) fluxo(); });
+  fluxo().catch((e) => falha(String(e?.message ?? e)));
+</script>
+</body>
+</html>
